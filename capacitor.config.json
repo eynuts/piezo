@@ -1,0 +1,23 @@
+{
+  "appId": "com.piezo.app",
+  "appName": "EHB Monitor",
+  "webDir": "dist",
+  "android": {
+    "backgroundColor": "#0b1118",
+    "allowMixedContent": false,
+    "captureInput": true,
+    "webContentsDebuggingEnabled": false
+  },
+  "plugins": {
+    "StatusBar": {
+      "style": "DARK",
+      "backgroundColor": "#0b1118",
+      "overlaysWebView": false
+    },
+    "SplashScreen": {
+      "launchShowDuration": 1500,
+      "backgroundColor": "#0b1118",
+      "showSpinner": false
+    }
+  }
+}
