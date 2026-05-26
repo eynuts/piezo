@@ -227,7 +227,7 @@ export default function Home() {
       <div className="device">
         <div className="header">
           <div className="title">
-            {tab === "today" ? "WALK POWER" : tab === "history" ? "HISTORY" : "SETTINGS"}{" "}
+            {tab === "today" ? "EHB Monitor" : tab === "history" ? "HISTORY" : "SETTINGS"}{" "}
             <span className="header-icon">
               {tab === "today" ? <FiZap /> : tab === "history" ? <FiBarChart2 /> : <FiSettings />}
             </span>
