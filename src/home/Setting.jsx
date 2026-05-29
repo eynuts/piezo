@@ -159,7 +159,7 @@ export default function Setting() {
           rightIcon={<FiZap />}
         />
         <div style={{ fontSize: "11px", color: "var(--muted)", marginTop: "8px", paddingLeft: "8px" }}>
-          When ON: mAh shows 0 until battery drops below 50%. When OFF: mAh shows normally.
+          When ON: mAh generates 0 until battery drops below 50%. When OFF: mAh generates normally.
         </div>
       </div>
 
