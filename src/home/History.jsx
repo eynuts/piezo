@@ -3,6 +3,7 @@ import "./History.css";
 import { jsPDF } from "jspdf";
 import { ref, onValue, set } from "firebase/database";
 import { db } from "../firebase";
+import { savePdf } from "../savePdf";
 
 const PIEZO_MAH_PER_STEP = 0.00000042;
 const PIEZOS_TOTAL = 8 * 60; // 8 tiles × 60 piezos each
@@ -206,103 +207,313 @@ export default function History() {
     };
   }, [weekKey]);
 
-  const downloadReportPdf = () => {
+  const [pdfLoading, setPdfLoading] = useState(false);
+
+  const downloadReportPdf = async () => {
+    setPdfLoading(true);
+    try {
     const pdf = new jsPDF("p", "mm", "a4");
+    const PW = 210; // page width mm
+    const PH = 297; // page height mm
+    const ML = 14;  // margin left
+    const MR = 14;  // margin right
+    const CW = PW - ML - MR; // content width
+
     const now = getEffectiveDate();
     const start = new Date(now);
     start.setDate(start.getDate() - start.getDay());
     const end = new Date(start);
     end.setDate(end.getDate() + 6);
+    const generatedOn = new Date().toLocaleString();
 
-    // Get real data for report, not the temporary random data
-    const realStepsArr = realDataRef.current.steps;
-    const realMahArr = realDataRef.current.mah;
-    const todayIdx = getEffectiveDayIndex();
-    
-    // Merge real data with current today's data from weeklySteps/weeklyMah (in case today is updated live)
-    const reportSteps = realStepsArr.map((v, i) => 
-      i === todayIdx ? weeklySteps[i].value : v
-    );
-    const reportMah = realMahArr.map((v, i) => 
-      i === todayIdx ? weeklyMah[i].value : v
-    );
+    const stepsVals = weeklySteps.map((d) => Number(d.value) || 0);
+    const mahVals   = weeklyMah.map((d) => Number(d.value) || 0);
+    const totalSteps  = stepsVals.reduce((s, v) => s + v, 0);
+    const totalMah    = mahVals.reduce((s, v) => s + v, 0);
+    const avgSteps    = Math.round(totalSteps / 7);
+    const avgMah      = Number((totalMah / 7).toFixed(4));
+    const maxSteps    = Math.max(...stepsVals, 0);
+    const maxMah      = Number(Math.max(...mahVals, 0).toFixed(4));
+    const activeDays  = stepsVals.filter((v) => v > 0).length;
+    const todayIdx    = getEffectiveDayIndex();
 
-    const stepsVals = reportSteps.map((d) => Number(d) || 0);
-    const mahVals = reportMah.map((d) => Number(d) || 0);
-    const totalSteps = stepsVals.reduce((s, v) => s + v, 0);
-    const avgMah = Number((mahVals.reduce((s, v) => s + v, 0) / mahVals.length).toFixed(2));
-    const maxSteps = Math.max(...stepsVals, 0);
-    const minSteps = Math.min(...stepsVals.filter((v) => v > 0), 0);
-    const maxMah = Math.max(...mahVals, 0);
-    const minMah = Math.min(...mahVals.filter((v) => v > 0), 0);
+    // ── Colour palette ──────────────────────────────────────────────────────
+    const C = {
+      navy:    [15,  23,  42],
+      teal:    [31, 183, 169],
+      blue:    [79, 149, 255],
+      white:   [255, 255, 255],
+      light:   [241, 245, 249],
+      muted:   [100, 116, 139],
+      border:  [203, 213, 225],
+      rowAlt:  [248, 250, 252],
+      today:   [236, 254, 252],
+    };
 
-    pdf.setFontSize(16);
-    pdf.text("Piezo Energy Weekly Report", 14, 18);
-    pdf.setFontSize(11);
-    pdf.text(`Week: ${start.toLocaleDateString()} – ${end.toLocaleDateString()}`, 14, 26);
+    const setFill  = (c) => pdf.setFillColor(...c);
+    const setStroke= (c) => pdf.setDrawColor(...c);
+    const setTxt   = (c) => pdf.setTextColor(...c);
+
+    // ── Helper: rounded rect ───────────────────────────────────────────────
+    const roundRect = (x, y, w, h, r, fill, stroke) => {
+      if (fill)   { setFill(fill);   pdf.roundedRect(x, y, w, h, r, r, "F"); }
+      if (stroke) { setStroke(stroke); pdf.roundedRect(x, y, w, h, r, r, "S"); }
+    };
+
+    // ── Helper: stat card ──────────────────────────────────────────────────
+    const statCard = (x, y, w, h, label, value, accent) => {
+      roundRect(x, y, w, h, 3, C.white, C.border);
+      // accent bar on left
+      setFill(accent);
+      pdf.rect(x, y, 2.5, h, "F");
+      setTxt(C.muted);
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(7.5);
+      pdf.text(label.toUpperCase(), x + 6, y + h * 0.38);
+      setTxt(C.navy);
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(13);
+      pdf.text(String(value), x + 6, y + h * 0.75);
+    };
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // PAGE 1 — COVER
+    // ═══════════════════════════════════════════════════════════════════════
+
+    // Header band
+    setFill(C.navy);
+    pdf.rect(0, 0, PW, 52, "F");
+
+    // Teal accent stripe
+    setFill(C.teal);
+    pdf.rect(0, 48, PW, 4, "F");
+
+    setTxt(C.white);
     pdf.setFont("helvetica", "bold");
-    pdf.setFontSize(12);
-    pdf.text(`Total Steps: ${totalSteps.toLocaleString()}`, 14, 40);
-    pdf.text(`Average mAh: ${avgMah}`, 14, 48);
-    pdf.text(`Max Steps: ${maxSteps.toLocaleString()}`, 14, 56);
-    pdf.text(`Min Steps (active days): ${minSteps.toLocaleString()}`, 14, 64);
-    pdf.text(`Max mAh: ${maxMah}`, 14, 72);
-    pdf.text(`Min mAh (active days): ${minMah}`, 14, 80);
-
-    pdf.addPage();
-    let y = 20;
-    const x = 14;
-    const colW = [30, 60, 30];
-    pdf.setFont("helvetica", "bold");
-    pdf.setFontSize(11);
-    pdf.text("Day", x, y);
-    pdf.text("Steps", x + colW[0], y);
-    pdf.text("mAh", x + colW[0] + colW[1], y);
-    pdf.setDrawColor(180);
-    pdf.line(x, y + 2, x + colW[0] + colW[1] + colW[2], y + 2);
+    pdf.setFontSize(22);
+    pdf.text("Piezo Energy", ML, 22);
+    pdf.setFontSize(13);
     pdf.setFont("helvetica", "normal");
-    pdf.setFontSize(10);
-    y += 8;
-    DAYS.forEach((label, i) => {
-      pdf.text(label, x, y);
-      pdf.text(Number(reportSteps[i] || 0).toLocaleString(), x + colW[0], y);
-      pdf.text(String(reportMah[i] ?? 0), x + colW[0] + colW[1], y);
-      pdf.setDrawColor(230);
-      pdf.line(x, y + 2, x + colW[0] + colW[1] + colW[2], y + 2);
-      y += 8;
+    pdf.text("Weekly Harvest Report", ML, 31);
+
+    pdf.setFontSize(9);
+    setTxt([180, 200, 220]);
+    pdf.text(`Week: ${start.toLocaleDateString()} – ${end.toLocaleDateString()}`, ML, 42);
+    pdf.text(`Generated: ${generatedOn}`, PW - MR - 60, 42);
+
+    // ── Summary cards (2×3 grid) ───────────────────────────────────────────
+    const cardW = (CW - 8) / 3;
+    const cardH = 22;
+    const cardY = 62;
+    const cardGap = 4;
+
+    const cards = [
+      { label: "Total Steps",   value: totalSteps.toLocaleString(),  accent: C.blue },
+      { label: "Total mAh",     value: totalMah.toFixed(4),          accent: C.teal },
+      { label: "Active Days",   value: `${activeDays} / 7`,           accent: C.navy },
+      { label: "Daily Avg Steps", value: avgSteps.toLocaleString(),   accent: C.blue },
+      { label: "Daily Avg mAh", value: avgMah.toFixed(4),            accent: C.teal },
+      { label: "Peak Steps",    value: maxSteps.toLocaleString(),     accent: [245,158,11] },
+    ];
+
+    cards.forEach((c, i) => {
+      const col = i % 3;
+      const row = Math.floor(i / 3);
+      const cx = ML + col * (cardW + cardGap);
+      const cy = cardY + row * (cardH + cardGap);
+      statCard(cx, cy, cardW, cardH, c.label, c.value, c.accent);
     });
 
-    // Chart page
-    pdf.addPage();
-    const chartX = 14;
-    const chartY = 20;
-    const chartW = 180;
-    const chartH = 80;
-    pdf.setDrawColor(180);
-    pdf.rect(chartX, chartY, chartW, chartH);
-    const stepX = chartW / Math.max(1, stepsVals.length - 1);
-    pdf.setLineWidth(0.6);
-    pdf.setDrawColor(79, 183, 255);
-    for (let i = 1; i < stepsVals.length; i++) {
-      const x1 = chartX + (i - 1) * stepX;
-      const y1 = chartY + chartH - ((stepsVals[i - 1] - minSteps) / Math.max(1e-6, maxSteps - minSteps)) * chartH;
-      const x2 = chartX + i * stepX;
-      const y2 = chartY + chartH - ((stepsVals[i] - minSteps) / Math.max(1e-6, maxSteps - minSteps)) * chartH;
-      pdf.line(x1, y1, x2, y2);
-    }
-    pdf.setDrawColor(31, 183, 169);
-    for (let i = 1; i < mahVals.length; i++) {
-      const x1 = chartX + (i - 1) * stepX;
-      const y1 = chartY + chartH - ((mahVals[i - 1] - minMah) / Math.max(1e-6, maxMah - minMah)) * chartH;
-      const x2 = chartX + i * stepX;
-      const y2 = chartY + chartH - ((mahVals[i] - minMah) / Math.max(1e-6, maxMah - minMah)) * chartH;
-      pdf.line(x1, y1, x2, y2);
-    }
-    pdf.setFont("helvetica", "bold");
-    pdf.setFontSize(11);
-    pdf.text("Steps (blue) and mAh (teal) trend", chartX, chartY + chartH + 10);
+    // ── Day-by-day mini table on cover ─────────────────────────────────────
+    const tblY = cardY + 2 * (cardH + cardGap) + 10;
 
-    pdf.save(`history-report-${start.toISOString().slice(0, 10)}.pdf`);
+    // Table header
+    setFill(C.navy);
+    pdf.rect(ML, tblY, CW, 8, "F");
+    setTxt(C.white);
+    pdf.setFont("helvetica", "bold");
+    pdf.setFontSize(8.5);
+    const cols = [
+      { label: "Day",    x: ML + 4,       align: "left"  },
+      { label: "Date",   x: ML + 28,      align: "left"  },
+      { label: "Steps",  x: ML + CW - 55, align: "right" },
+      { label: "mAh",    x: ML + CW - 4,  align: "right" },
+    ];
+    cols.forEach((c) => {
+      pdf.text(c.label, c.x, tblY + 5.5, { align: c.align });
+    });
+
+    let rowY = tblY + 8;
+    const rowH = 8.5;
+    DAYS.forEach((day, i) => {
+      const isToday = i === todayIdx;
+      const bg = isToday ? C.today : (i % 2 === 0 ? C.white : C.rowAlt);
+      setFill(bg);
+      pdf.rect(ML, rowY, CW, rowH, "F");
+
+      // Today badge
+      if (isToday) {
+        setFill(C.teal);
+        roundRect(ML + 1, rowY + 1.5, 5, rowH - 3, 1, C.teal, null);
+      }
+
+      // Row border
+      setStroke(C.border);
+      pdf.setLineWidth(0.2);
+      pdf.line(ML, rowY + rowH, ML + CW, rowY + rowH);
+
+      setTxt(isToday ? C.teal : C.navy);
+      pdf.setFont("helvetica", isToday ? "bold" : "normal");
+      pdf.setFontSize(8.5);
+
+      // Day label (offset if today badge)
+      pdf.text(day, ML + (isToday ? 9 : 4), rowY + 5.8);
+
+      // Date
+      const dayDate = new Date(start);
+      dayDate.setDate(dayDate.getDate() + i);
+      setTxt(C.muted);
+      pdf.setFont("helvetica", "normal");
+      pdf.text(dayDate.toLocaleDateString(undefined, { month: "short", day: "numeric" }), ML + 28, rowY + 5.8);
+
+      // Steps
+      setTxt(stepsVals[i] > 0 ? C.navy : C.muted);
+      pdf.setFont("helvetica", stepsVals[i] > 0 ? "bold" : "normal");
+      pdf.text(stepsVals[i] > 0 ? stepsVals[i].toLocaleString() : "—", ML + CW - 55, rowY + 5.8, { align: "right" });
+
+      // mAh
+      setTxt(mahVals[i] > 0 ? C.teal : C.muted);
+      pdf.setFont("helvetica", mahVals[i] > 0 ? "bold" : "normal");
+      pdf.text(mahVals[i] > 0 ? mahVals[i].toFixed(4) : "—", ML + CW - 4, rowY + 5.8, { align: "right" });
+
+      rowY += rowH;
+    });
+
+    // Outer border for table
+    setStroke(C.border);
+    pdf.setLineWidth(0.3);
+    pdf.rect(ML, tblY, CW, 8 + DAYS.length * rowH, "S");
+
+    // Footer
+    setTxt(C.muted);
+    pdf.setFont("helvetica", "normal");
+    pdf.setFontSize(7.5);
+    pdf.text("EHB Piezo Energy Harvesting Dashboard", ML, PH - 8);
+    pdf.text("Page 1 of 2", PW - MR, PH - 8, { align: "right" });
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // PAGE 2 — BAR CHARTS
+    // ═══════════════════════════════════════════════════════════════════════
+    pdf.addPage();
+
+    // Header band
+    setFill(C.navy);
+    pdf.rect(0, 0, PW, 18, "F");
+    setFill(C.teal);
+    pdf.rect(0, 16, PW, 2, "F");
+
+    setTxt(C.white);
+    pdf.setFont("helvetica", "bold");
+    pdf.setFontSize(13);
+    pdf.text("Weekly Charts", ML, 12);
+    setTxt([180, 200, 220]);
+    pdf.setFont("helvetica", "normal");
+    pdf.setFontSize(8);
+    pdf.text(`${start.toLocaleDateString()} – ${end.toLocaleDateString()}`, PW - MR, 12, { align: "right" });
+
+    // ── Bar chart helper ───────────────────────────────────────────────────
+    const drawBarChart = (chartX, chartY, chartW, chartH, vals, label, barColor, unit) => {
+      const maxVal = Math.max(...vals, 1);
+      const barW   = (chartW - 10) / vals.length;
+      const gap    = barW * 0.25;
+      const bw     = barW - gap;
+
+      // Chart background
+      roundRect(chartX, chartY, chartW, chartH + 20, 3, C.light, C.border);
+
+      // Title
+      setTxt(C.navy);
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(9);
+      pdf.text(label, chartX + 6, chartY + 7);
+
+      // Unit legend pill
+      setFill(barColor);
+      roundRect(chartX + chartW - 28, chartY + 3, 24, 6, 2, barColor, null);
+      setTxt(C.white);
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(6.5);
+      pdf.text(unit, chartX + chartW - 16, chartY + 7.2, { align: "center" });
+
+      // Y-axis grid lines (4 lines)
+      const plotTop  = chartY + 14;
+      const plotBot  = chartY + chartH + 4;
+      const plotH    = plotBot - plotTop;
+      pdf.setLineWidth(0.15);
+      for (let g = 0; g <= 4; g++) {
+        const gy = plotTop + (g / 4) * plotH;
+        setStroke(C.border);
+        pdf.line(chartX + 8, gy, chartX + chartW - 4, gy);
+        // Y label
+        const gVal = maxVal * (1 - g / 4);
+        setTxt(C.muted);
+        pdf.setFont("helvetica", "normal");
+        pdf.setFontSize(5.5);
+        pdf.text(
+          gVal >= 1 ? Math.round(gVal).toLocaleString() : gVal.toFixed(4),
+          chartX + 6, gy + 1, { align: "right" }
+        );
+      }
+
+      // Bars
+      vals.forEach((v, i) => {
+        const isToday = i === todayIdx;
+        const h  = v > 0 ? Math.max((v / maxVal) * plotH, 1.5) : 0;
+        const bx = chartX + 8 + i * barW + gap / 2;
+        const by = plotBot - h;
+
+        // Bar fill
+        if (v > 0) {
+          setFill(isToday ? C.teal : barColor);
+          roundRect(bx, by, bw, h, 1.5, isToday ? C.teal : barColor, null);
+        }
+
+        // Value label above bar
+        if (v > 0) {
+          setTxt(isToday ? C.teal : C.navy);
+          pdf.setFont("helvetica", isToday ? "bold" : "normal");
+          pdf.setFontSize(5.5);
+          const vLabel = v >= 1 ? v.toLocaleString() : v.toFixed(4);
+          pdf.text(vLabel, bx + bw / 2, by - 1, { align: "center" });
+        }
+
+        // Day label below
+        setTxt(i === todayIdx ? C.teal : C.muted);
+        pdf.setFont("helvetica", i === todayIdx ? "bold" : "normal");
+        pdf.setFontSize(6.5);
+        pdf.text(DAYS[i].slice(0, 3), bx + bw / 2, plotBot + 5, { align: "center" });
+      });
+
+      // Baseline
+      setStroke(C.navy);
+      pdf.setLineWidth(0.4);
+      pdf.line(chartX + 8, plotBot, chartX + chartW - 4, plotBot);
+    };
+
+    drawBarChart(ML,      30, CW, 90, stepsVals, "Steps per Day",  C.blue, "Steps");
+    drawBarChart(ML, 155, CW, 90, mahVals,   "Energy per Day (mAh)", C.teal, "mAh");
+
+    // Footer
+    setTxt(C.muted);
+    pdf.setFont("helvetica", "normal");
+    pdf.setFontSize(7.5);
+    pdf.text("EHB Piezo Energy Harvesting Dashboard", ML, PH - 8);
+    pdf.text("Page 2 of 2", PW - MR, PH - 8, { align: "right" });
+
+    await savePdf(pdf, `piezo-report-${start.toISOString().slice(0, 10)}.pdf`);
+    } finally {
+      setPdfLoading(false);
+    }
   };
 
   if (loading) {
@@ -316,8 +527,13 @@ export default function History() {
   return (
     <div className="history" ref={containerRef}>
       <div className="history-actions">
-        <button type="button" className="btn" onClick={downloadReportPdf}>
-          Download Report PDF
+        <button
+          type="button"
+          className="btn"
+          onClick={downloadReportPdf}
+          disabled={pdfLoading}
+        >
+          {pdfLoading ? "Generating…" : "Download Report PDF"}
         </button>
       </div>
       <div className="history-section">

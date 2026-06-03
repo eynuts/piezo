@@ -50,8 +50,9 @@ void setLightRelay(bool on) {
 const int SENSOR_PIN   = A0;
 const int BATTERY_PIN  = A1;
 
-// Most voltage sensor modules already include a voltage divider.
-// Set this to the module's division ratio, for example 5.0 for a 1/5 divider when measuring up to 25V.
+// Most voltage sensor modules include a voltage divider so they can read up to 25V.
+// This ratio recovers the real battery voltage from the divided ADC reading.
+// The PIEZO sensor on A0 is direct — no divider, no multiplier needed there.
 const float BATTERY_DIVIDER_RATIO = 5.0;
 const float BATTERY_V_OFFSET = 0.9; // extra voltage added to the displayed battery voltage
 
