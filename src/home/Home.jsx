@@ -481,11 +481,7 @@ export default function Home() {
                 <svg viewBox="0 0 320 80" preserveAspectRatio="none">
                   {dynamicPath ? (
                     <path d={dynamicPath} className="graph-line" />
-                  ) : (
-                    <text x="50%" y="50%" textAnchor="middle" fill="var(--muted)" fontSize="10">
-                      Waiting for data…
-                    </text>
-                  )}
+                  ) : null}
                 </svg>
                 <div className="graph-label" style={{ opacity: 0, display: "none" }}>LIVE EST. ENERGY RATE (mAh/h)</div>
               </div>
@@ -520,18 +516,6 @@ export default function Home() {
                 </div>
               )}
 
-              {!connected && (
-                <div
-                  style={{
-                    textAlign: "center",
-                    fontSize: "11px",
-                    color: "#ff6b6b",
-                    marginTop: "8px",
-                  }}
-                >
-                  Waiting for ESP32 data…
-                </div>
-              )}
             </>
           ) : tab === "history" ? (
             <History />
