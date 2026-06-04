@@ -74,6 +74,9 @@ export default function History() {
   // Placeholder values are generated once on first load and reused on every
   // subsequent Firebase update so they never flicker/change.
   const placeholderRef = useRef(null);
+  // true after the first onValue fires — subsequent Firebase echoes from our
+  // own writes should not overwrite the live step count for today.
+  const initialLoadDoneRef = useRef(false);
 
   // Read weekly data from Firebase — no localStorage fallback, no fake data
   useEffect(() => {
@@ -103,6 +106,11 @@ export default function History() {
           steps: [...stepsArr],
           mah: [...mahArr]
         };
+
+        // Don't overwrite today's slot from Firebase — the live onUpdate handler
+        // always has the freshest value. Only restore it on the very first load.
+        // We detect "first load" by checking if weeklySteps is still all zeros.
+        // After that, today's value comes exclusively from piezo-today-update events.
 
         // Generate placeholders only once per week — values are deterministic
         // (derived from weekKey + day index) so they are identical on every
@@ -134,8 +142,33 @@ export default function History() {
           if (stepsArr[i] === 0) mahArr[i] = 0;
         }
 
-        setWeeklySteps(stepsArr.map((v, i) => ({ label: DAYS[i], value: v, today: i === todayIdx })));
-        setWeeklyMah(mahArr.map((v, i) => ({ label: DAYS[i], value: v, today: i === todayIdx })));
+        setWeeklySteps((prev) => {
+          return stepsArr.map((v, i) => ({
+            label: DAYS[i],
+            // On the very first load accept Firebase value for today.
+            // After that, keep whatever live onUpdate already set.
+            value: (i === todayIdx && initialLoadDoneRef.current)
+              ? prev[todayIdx].value
+              : v,
+            today: i === todayIdx,
+          }));
+        });
+
+        setWeeklyMah((prev) => {
+          return mahArr.map((v, i) => ({
+            label: DAYS[i],
+            value: (i === todayIdx && initialLoadDoneRef.current)
+              ? prev[todayIdx].value
+              : v,
+            today: i === todayIdx,
+          }));
+        });
+
+        initialLoadDoneRef.current = true;
+
+        // Ask Home to re-broadcast today's current step count so History
+        // gets the correct value even if it mounted after the initial event.
+        window.dispatchEvent(new CustomEvent("piezo-request-sync"));
       },
       (error) => {
         console.error("Firebase /history error:", error);
@@ -148,41 +181,45 @@ export default function History() {
   // Receive live step updates from Home and write them to Firebase
   useEffect(() => {
     const onUpdate = (e) => {
-      const { dayIndex, steps, mahPerHour, dailyMah } = e.detail || {};
+      const { dayIndex, steps, dailyMah } = e.detail || {};
       if (typeof dayIndex !== "number") return;
 
-      setWeeklySteps((arr) => {
-        const next = arr.map((d, i) =>
-          i === dayIndex ? { ...d, value: steps ?? d.value, today: i === getEffectiveDayIndex() } : { ...d, today: false }
-        );
-        // Only save real data to Firebase: original real data + today's new data
-        const realSteps = [...realDataRef.current.steps];
-        realSteps[dayIndex] = steps ?? realSteps[dayIndex];
-        set(ref(db, `history/${weekKey}/steps`), realSteps).catch(console.error);
-        // Update the ref to include today's new data
-        realDataRef.current.steps = realSteps;
-        return next;
-      });
+      const todayIdx = getEffectiveDayIndex();
 
-      setWeeklyMah((arr) => {
-        const mahValue = dailyMah != null
-          ? Number(dailyMah)
-          : steps != null
-          ? Number((steps * EFFECTIVE_PIEZO_MAH_PER_STEP).toFixed(6))
-          : null;
-        const next = arr.map((d, i) =>
+      // Compute mAh from steps if not provided
+      const mahValue = dailyMah != null
+        ? Number(dailyMah)
+        : steps != null
+        ? Number((steps * EFFECTIVE_PIEZO_MAH_PER_STEP).toFixed(6))
+        : null;
+
+      // Update displayed state — only touch today's slot, leave all other days alone
+      setWeeklySteps((arr) =>
+        arr.map((d, i) =>
           i === dayIndex
-            ? { ...d, value: mahValue ?? d.value, today: i === getEffectiveDayIndex() }
-            : { ...d, today: false }
-        );
-        // Only save real data to Firebase: original real data + today's new data
-        const realMah = [...realDataRef.current.mah];
-        realMah[dayIndex] = mahValue ?? realMah[dayIndex];
-        set(ref(db, `history/${weekKey}/mah`), realMah).catch(console.error);
-        // Update the ref to include today's new data
-        realDataRef.current.mah = realMah;
-        return next;
-      });
+            ? { ...d, value: steps ?? d.value, today: i === todayIdx }
+            : d  // ← don't touch other days at all
+        )
+      );
+
+      setWeeklyMah((arr) =>
+        arr.map((d, i) =>
+          i === dayIndex
+            ? { ...d, value: mahValue ?? d.value, today: i === todayIdx }
+            : d  // ← don't touch other days at all
+        )
+      );
+
+      // Write only today's real data back to Firebase
+      const realSteps = [...realDataRef.current.steps];
+      realSteps[dayIndex] = steps ?? realSteps[dayIndex];
+      realDataRef.current.steps = realSteps;
+      set(ref(db, `history/${weekKey}/steps`), realSteps).catch(console.error);
+
+      const realMah = [...realDataRef.current.mah];
+      realMah[dayIndex] = mahValue ?? realMah[dayIndex];
+      realDataRef.current.mah = realMah;
+      set(ref(db, `history/${weekKey}/mah`), realMah).catch(console.error);
     };
 
 

@@ -118,6 +118,28 @@ export default function Home() {
     return () => window.removeEventListener("piezo-theme", onTheme);
   }, []);
 
+  // When History mounts late and requests a sync, re-broadcast today's count
+  useEffect(() => {
+    const onSyncRequest = () => {
+      setSteps((current) => {
+        const dailyMah = Number((current * HISTORY_EFFECTIVE_PIEZO_MAH_PER_STEP).toFixed(6));
+        window.dispatchEvent(
+          new CustomEvent("piezo-today-update", {
+            detail: {
+              dayIndex: getEffectiveDayIndex(),
+              steps: current,
+              mahPerHour: 0,
+              dailyMah,
+            },
+          })
+        );
+        return current; // don't change the value
+      });
+    };
+    window.addEventListener("piezo-request-sync", onSyncRequest);
+    return () => window.removeEventListener("piezo-request-sync", onSyncRequest);
+  }, []);
+
   // Listen to /serialInputs
   // On first snapshot: count today's entries by datetime prefix → restore today's total
   // On subsequent snapshots: count only entries newer than lastTimestamp → add increments
@@ -224,6 +246,14 @@ export default function Home() {
   const hasBattery = batteryPercent !== null;
   const dailyMahTotal = Number((steps * HISTORY_EFFECTIVE_PIEZO_MAH_PER_STEP).toFixed(6));
 
+  // Battery capacity of the pack in mAh
+  const BATTERY_CAPACITY_MAH = 40000;
+  // Add the contribution from today's generated mAh to the ESP-reported base %
+  const generatedContribution = (dailyMahTotal / BATTERY_CAPACITY_MAH) * 100;
+  const adjustedBatteryPercent = hasBattery
+    ? Math.min(100, batteryPercent + generatedContribution)
+    : null;
+
   return (
     <div className="home">
       <div className="device">
@@ -258,7 +288,7 @@ export default function Home() {
                 <CircleStat title="STEPS" value={steps} max={1} forceFull icon={<IconFoot />} />
                 <CircleStat
                   title="TOTAL mAh"
-                  value={dailyMahTotal.toFixed(4)}
+                  value={dailyMahTotal.toFixed(2)}
                   max={0.02}
                   unit="mAh"
                   highlight="gen"
@@ -266,9 +296,9 @@ export default function Home() {
                 />
                 <CircleStat
                   title="BATTERY %"
-                  value={hasBattery ? batteryPercent.toFixed(1) : "—"}
+                  value={adjustedBatteryPercent !== null ? adjustedBatteryPercent.toFixed(1) : "—"}
                   max={100}
-                  unit={hasBattery ? "%" : ""}
+                  unit={adjustedBatteryPercent !== null ? "%" : ""}
                   highlight="battery"
                   icon={<IconCog />}
                 />
@@ -276,10 +306,10 @@ export default function Home() {
               <div className="screen-overlay" />
               <div className="sparkles" />
               {hasBattery && (
-                <div style={{ textAlign: "center", fontSize: "11px", color: "var(--muted)", marginTop: "4px" }}>
+                <div style={{ display: "none" }}>
                   {batteryVoltage !== null
-                    ? `Battery: ${batteryVoltage.toFixed(2)} V · ${batteryPercent.toFixed(1)}%`
-                    : `Battery: ${batteryPercent.toFixed(1)}%`}
+                    ? `Battery: ${batteryVoltage.toFixed(2)} V · Base: ${batteryPercent.toFixed(1)}% + ${generatedContribution.toFixed(2)}% generated`
+                    : `Base: ${batteryPercent.toFixed(1)}% + ${generatedContribution.toFixed(2)}% generated`}
                 </div>
               )}
             </>
