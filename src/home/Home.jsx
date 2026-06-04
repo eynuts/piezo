@@ -10,21 +10,13 @@ const PIEZO_MAH_PER_STEP = 0.00000042;
 const PIEZOS_TOTAL = 8 * 60;
 const HISTORY_EFFECTIVE_PIEZO_MAH_PER_STEP = PIEZO_MAH_PER_STEP * PIEZOS_TOTAL * 40000;
 
-// Returns "YYYY-MM-DD" for today (used to filter /serialInputs by datetime)
+// Returns "YYYY-MM-DD" in local time
 function getTodayPrefix() {
   const d = new Date();
-  return d.toISOString().slice(0, 10); // e.g. "2026-06-04"
-}
-
-function getEffectiveDayIndex() {
-  return new Date().getDay();
-}
-
-function getWeekStartKey() {
-  const now = new Date();
-  now.setHours(0, 0, 0, 0);
-  now.setDate(now.getDate() - now.getDay());
-  return now.toISOString().slice(0, 10);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
 function IconFoot() {
@@ -99,9 +91,6 @@ export default function Home() {
   const [tab, setTab] = useState("today");
   const [connected, setConnected] = useState(false);
 
-  const isFirstLoadRef = useRef(true);
-  const lastTimestampRef = useRef(0);
-
   // Apply saved theme
   useEffect(() => {
     try {
@@ -118,34 +107,12 @@ export default function Home() {
     return () => window.removeEventListener("piezo-theme", onTheme);
   }, []);
 
-  // When History mounts late and requests a sync, re-broadcast today's count
-  useEffect(() => {
-    const onSyncRequest = () => {
-      setSteps((current) => {
-        const dailyMah = Number((current * HISTORY_EFFECTIVE_PIEZO_MAH_PER_STEP).toFixed(6));
-        window.dispatchEvent(
-          new CustomEvent("piezo-today-update", {
-            detail: {
-              dayIndex: getEffectiveDayIndex(),
-              steps: current,
-              mahPerHour: 0,
-              dailyMah,
-            },
-          })
-        );
-        return current; // don't change the value
-      });
-    };
-    window.addEventListener("piezo-request-sync", onSyncRequest);
-    return () => window.removeEventListener("piezo-request-sync", onSyncRequest);
-  }, []);
-
   // Listen to /serialInputs
   // On first snapshot: count today's entries by datetime prefix → restore today's total
-  // On subsequent snapshots: count only entries newer than lastTimestamp → add increments
+  // Listen to /serialInputs — recount today's entries on every snapshot
+  // This is robust against ESP reboots (millis() resets) and always correct.
   useEffect(() => {
     const stepsRef = ref(db, "serialInputs");
-    const todayPrefix = getTodayPrefix(); // "2026-06-04"
 
     const unsub = onValue(
       stepsRef,
@@ -154,67 +121,16 @@ export default function Home() {
         const data = snapshot.val();
         if (!data || typeof data !== "object") return;
 
-        const entries = Object.values(data);
+        // Always use local date so it matches the ESP32's datetime field
+        const todayPrefix = getTodayPrefix();
 
-        if (isFirstLoadRef.current) {
-          isFirstLoadRef.current = false;
+        const todaySteps = Object.values(data).filter(
+          (e) =>
+            String(e.text || "").trim() === "1" &&
+            String(e.datetime || "").startsWith(todayPrefix)
+        ).length;
 
-          // Count all step pulses whose datetime belongs to today
-          const todaySteps = entries.filter(
-            (e) =>
-              String(e.text || "").trim() === "1" &&
-              String(e.datetime || "").startsWith(todayPrefix)
-          ).length;
-
-          // Remember the highest timestamp already in DB so we don't recount them
-          const maxTs = entries.reduce((m, e) => Math.max(m, e.timestamp || 0), 0);
-          lastTimestampRef.current = maxTs;
-
-          setSteps(todaySteps);
-
-          // Sync restored count into History tab
-          const dailyMah = Number((todaySteps * HISTORY_EFFECTIVE_PIEZO_MAH_PER_STEP).toFixed(6));
-          window.dispatchEvent(
-            new CustomEvent("piezo-today-update", {
-              detail: {
-                dayIndex: getEffectiveDayIndex(),
-                steps: todaySteps,
-                mahPerHour: 0,
-                dailyMah,
-              },
-            })
-          );
-          return;
-        }
-
-        // Live updates — only entries with a timestamp we haven't seen yet
-        const newEntries = entries
-          .filter((e) => (e.timestamp || 0) > lastTimestampRef.current)
-          .sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
-
-        newEntries.forEach((entry) => {
-          const ts = entry.timestamp || 0;
-          const text = String(entry.text || "").trim();
-          lastTimestampRef.current = ts;
-
-          if (text === "1") {
-            setSteps((s) => {
-              const ns = s + 1;
-              const dailyMah = Number((ns * HISTORY_EFFECTIVE_PIEZO_MAH_PER_STEP).toFixed(6));
-              window.dispatchEvent(
-                new CustomEvent("piezo-today-update", {
-                  detail: {
-                    dayIndex: getEffectiveDayIndex(),
-                    steps: ns,
-                    mahPerHour: 0,
-                    dailyMah,
-                  },
-                })
-              );
-              return ns;
-            });
-          }
-        });
+        setSteps(todaySteps);
       },
       (error) => {
         console.error("Firebase /serialInputs error:", error);
@@ -223,7 +139,7 @@ export default function Home() {
     );
 
     return () => unsub();
-  }, []); // runs once — todayPrefix is captured at mount, correct for the day
+  }, []);
 
   // Listen to /battery
   useEffect(() => {
@@ -284,6 +200,56 @@ export default function Home() {
         <div key={tab} className={`tab-content tab-${tab}`}>
           {tab === "today" ? (
             <>
+              {/* ── Desktop stat cards ── */}
+              <div className="today-grid">
+                <div className="stat-cards">
+                  <div className="stat-card blue">
+                    <div className="stat-card-label">Steps Today</div>
+                    <div className="stat-card-value">
+                      {steps.toLocaleString()}
+                    </div>
+                    <div className="stat-card-icon"><IconFoot /></div>
+                  </div>
+                  <div className="stat-card teal">
+                    <div className="stat-card-label">Total mAh Generated</div>
+                    <div className="stat-card-value">
+                      {dailyMahTotal.toFixed(2)}
+                      <span className="unit">mAh</span>
+                    </div>
+                    <div className="stat-card-icon"><IconBattery /></div>
+                  </div>
+                  <div className="stat-card green">
+                    <div className="stat-card-label">Battery Level</div>
+                    <div className="stat-card-value">
+                      {adjustedBatteryPercent !== null
+                        ? `${adjustedBatteryPercent.toFixed(1)}`
+                        : "—"}
+                      {adjustedBatteryPercent !== null && <span className="unit">%</span>}
+                    </div>
+                    <div className="stat-card-icon"><IconCog /></div>
+                  </div>
+                </div>
+
+                {/* ── Info row ── */}
+                {hasBattery && (
+                  <div style={{ display: "none" }}>
+                    <div className="info-card">
+                      <div className="info-card-label">Battery Voltage</div>
+                      <div className="info-card-value" style={{ color: "var(--teal)" }}>
+                        {batteryVoltage !== null ? `${batteryVoltage.toFixed(2)} V` : "—"}
+                      </div>
+                    </div>
+                    <div className="info-card">
+                      <div className="info-card-label">Base % + Generated</div>
+                      <div className="info-card-value" style={{ color: "var(--blue)" }}>
+                        {batteryPercent.toFixed(1)}% + {generatedContribution.toFixed(2)}%
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* ── Mobile meters (hidden on desktop via CSS) ── */}
               <div className="meter-row">
                 <CircleStat title="STEPS" value={steps} max={1} forceFull icon={<IconFoot />} />
                 <CircleStat
