@@ -71,6 +71,9 @@ export default function History() {
   const containerRef = useRef(null);
   const weekKey = getWeekStartKey();
   const realDataRef = useRef({ steps: Array(7).fill(0), mah: Array(7).fill(0) });
+  // Placeholder values are generated once on first load and reused on every
+  // subsequent Firebase update so they never flicker/change.
+  const placeholderRef = useRef(null);
 
   // Read weekly data from Firebase — no localStorage fallback, no fake data
   useEffect(() => {
@@ -95,50 +98,40 @@ export default function History() {
           }
         }
 
-        // Save the original real data to ref
+        // Save the real data (no placeholders) so onUpdate only writes real values
         realDataRef.current = {
           steps: [...stepsArr],
           mah: [...mahArr]
         };
 
-        // Add temporary random data (100-150 steps) for days without data (except today)
-        for (let i = 0; i < 7; i++) {
-          if (i !== todayIdx && stepsArr[i] === 0) {
-            const randomSteps = Math.floor(Math.random() * 51) + 100; // 100-150 inclusive
-            stepsArr[i] = randomSteps;
-            mahArr[i] = Number((randomSteps * EFFECTIVE_PIEZO_MAH_PER_STEP).toFixed(6));
-          }
-        }
-
-        // If mah values are missing or outdated, regenerate them from the current step multiplier.
-        // Only do this for days that actually have real step data (not our temporary random data)
-        let wroteGenerated = false;
-        let hasRealData = false;
-        if (data) {
-          hasRealData = (Array.isArray(data.steps) && data.steps.some(v => Number(v) > 0)) ||
-                       (Array.isArray(data.mah) && data.mah.some(v => Number(v) > 0));
-        }
-
-        for (let i = 0; i < 7; i++) {
-          const s = Number(stepsArr[i] || 0);
-          const m = Number(mahArr[i] || 0);
-          // Check if this day had real data from Firebase originally
-          const hadRealData = data && (
-            (Array.isArray(data.steps) && Number(data.steps[i]) > 0) ||
-            (Array.isArray(data.mah) && Number(data.mah[i]) > 0)
-          );
-          if (s > 0 && hadRealData) {
-            const expected = Number((s * EFFECTIVE_PIEZO_MAH_PER_STEP).toFixed(6));
-            if (Math.abs(m - expected) > 0.000001) {
-              mahArr[i] = expected;
-              wroteGenerated = true;
+        // Generate placeholders only once per week — values are deterministic
+        // (derived from weekKey + day index) so they are identical on every
+        // reload and never change when today receives new data.
+        if (!placeholderRef.current) {
+          const ph = Array(7).fill(0);
+          // Stable seed from the week key string (e.g. "2026-06-01" → number)
+          const seed = weekKey.replace(/-/g, "").split("").reduce((a, c) => a + c.charCodeAt(0), 0);
+          for (let i = 0; i < 7; i++) {
+            if (i < todayIdx && stepsArr[i] === 0) {
+              // Always in the range 100-150, unique per day, never random
+              ph[i] = 100 + ((seed + i * 17) % 51);
             }
           }
+          placeholderRef.current = ph;
         }
 
-        // Persist generated mah back to Firebase ONLY if we had real data
-        if (wroteGenerated && hasRealData) {
-          set(ref(db, `history/${weekKey}/mah`), mahArr).catch(console.error);
+        // Apply placeholders to days that still have no real data
+        const ph = placeholderRef.current;
+        for (let i = 0; i < 7; i++) {
+          if (i < todayIdx && stepsArr[i] === 0 && ph[i] > 0) {
+            stepsArr[i] = ph[i];
+            mahArr[i] = Number((ph[i] * EFFECTIVE_PIEZO_MAH_PER_STEP).toFixed(6));
+          }
+        }
+
+        // Enforce: 0 steps → 0 mAh (clears any orphaned mAh from old Firebase writes)
+        for (let i = 0; i < 7; i++) {
+          if (stepsArr[i] === 0) mahArr[i] = 0;
         }
 
         setWeeklySteps(stepsArr.map((v, i) => ({ label: DAYS[i], value: v, today: i === todayIdx })));
